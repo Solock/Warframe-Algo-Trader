@@ -289,12 +289,39 @@ def postOrder(item, order_type, platinum, quantity, visible, modRank, itemName):
         return FakeResponse({"apiVersion": "dry-run", "data": fakeOrder, "error": None})
 
     response = warframeApi.post(f"{WFM_API}/order", json=json_data)
+    if response.status_code == 400 and _missingSubtype(response):
+        # Certains items existent en plusieurs variantes (ex: parts Ambassador
+        # blueprint/crafted) et la v2 exige alors le champ subtype. Le farm
+        # donne des blueprints, donc "blueprint" si l'item le propose.
+        subtype = _defaultSubtype(itemName)
+        if subtype is not None:
+            json_data["subtype"] = subtype
+            customLogger.writeTo(
+                "orderTracker.log",
+                f"RETRY-SUBTYPE\tItem:{itemName}\tsubtype:{subtype}",
+            )
+            response = warframeApi.post(f"{WFM_API}/order", json=json_data)
     if response.status_code == 200:
         customLogger.writeTo(
             "orderTracker.log",
             f"POSTED\tItem:{itemName}\tOrder Type:{order_type}\tPlatinum:{platinum}\tQuantity:{quantity}\tVisible:{json_data['visible']}",
         )
     return response
+
+
+def _missingSubtype(response):
+    try:
+        return "subtype" in response.json()["error"]["inputs"]
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
+def _defaultSubtype(slug):
+    details = getItemDetails(slug)
+    subtypes = (details or {}).get("subtypes") or []
+    if not subtypes:
+        return None
+    return "blueprint" if "blueprint" in subtypes else subtypes[0]
 
 
 def updateListing(listing_id, platinum, quantity, visibility, itemName, order_type):
