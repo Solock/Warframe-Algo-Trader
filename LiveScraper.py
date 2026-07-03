@@ -374,7 +374,7 @@ def compareLiveOrdersWhenSelling(item, liveOrderDF, itemStats, currentOrders, it
     if (not (item in inventory["name"].unique())) and (not myOrderActive):
         return
     elif (not (item in inventory["name"].unique())):
-        updateDBPrice(myOrderID, None)
+        updateDBPrice(item, None)
         wfm.deleteOrder(myOrderID)
         logging.debug(f"Deleted sell order for {item} since this is not in your inventory.")
         return
