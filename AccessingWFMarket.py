@@ -173,12 +173,20 @@ def getItemDetails(slug):
 
 
 def checkAuth():
-    """Vérifie le token sans rien poster. Retourne (ok, ingameName|None)."""
-    r = warframeApi.get(f"{WFM_API}/me")
-    if r.status_code != 200:
-        return False, None
-    me = r.json()["data"]
-    return True, me.get("ingameName")
+    """Vérifie le token sans rien poster. Retourne (ok, ingameName|None).
+
+    Essaie 'Bearer <token>' (format documenté v2), puis retombe sur
+    'JWT <token>' (format v1) — non testable sans token réel, donc
+    les deux formats sont couverts.
+    """
+    for prefix in ("Bearer", "JWT"):
+        warframeApi.session.headers["Authorization"] = f"{prefix} {config.wfm_token}"
+        r = warframeApi.get(f"{WFM_API}/me")
+        if r.status_code == 200:
+            me = r.json()["data"]
+            return True, me.get("ingameName")
+    warframeApi.session.headers["Authorization"] = f"Bearer {config.wfm_token}"
+    return False, None
 
 
 def login(user_email: str, user_password: str, platform: str = "pc", language: str = "en"):
