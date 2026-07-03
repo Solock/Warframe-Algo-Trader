@@ -428,10 +428,14 @@ def compareLiveOrdersWhenSelling(item, liveOrderDF, itemStats, currentOrders, it
     if bestSeller["platinum"] - avgCost <= -10:
         SelfTexting.send_push("EMERGENCY", f"The price of {item} is probably dropping and you should sell this to minimize losses asap")
 
-    if avgCost + 10 > postPrice and numSellers >= 2:
-        postPrice = max([avgCost + 10, liveSellerDF.iloc[1]['platinum']])
+    # Marge mini au-dessus du coût d'achat. Le +10 d'origine suppose des items
+    # ACHETÉS à revendre ; pour du stock farmé (purchasePrice=0) il forçait un
+    # plancher à 10 plat qui rendait les petits items invendables → sellMargin: 0.
+    sellMargin = settings.get("sellMargin", 10)
+    if avgCost + sellMargin > postPrice and numSellers >= 2:
+        postPrice = max([avgCost + sellMargin, liveSellerDF.iloc[1]['platinum']])
     else:
-        postPrice = max([avgCost + 10, postPrice])
+        postPrice = max([avgCost + sellMargin, postPrice])
 
     if myOrderActive:
         if (myPlatPrice != (postPrice)):
