@@ -131,9 +131,9 @@ buySellOverlap = getBuySellOverlap(settings)
 def updateDBPrice(itemName, listedPrice):
     con = sqlite3.connect("inventory.db")
     cur = con.cursor()
-    purchasePrice = cur.execute(f"SELECT SUM(purchasePrice) FROM inventory WHERE name='{itemName}'").fetchone()[0]
-    number = cur.execute(f"SELECT SUM(number) FROM inventory WHERE name='{itemName}'").fetchone()[0]
-    cur.execute(f"UPDATE inventory SET purchasePrice=?, number=?, listedPrice=? WHERE name=?", [purchasePrice, number, listedPrice, itemName])
+    purchasePrice = cur.execute("SELECT SUM(purchasePrice) FROM inventory WHERE name=?", (itemName,)).fetchone()[0]
+    number = cur.execute("SELECT SUM(number) FROM inventory WHERE name=?", (itemName,)).fetchone()[0]
+    cur.execute("UPDATE inventory SET purchasePrice=?, number=?, listedPrice=? WHERE name=?", [purchasePrice, number, listedPrice, itemName])
     con.commit()
     con.close()
 

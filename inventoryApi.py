@@ -31,7 +31,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-origins = ["*"]
+# L'API pilote le compte warframe.market sans auth : on ne laisse
+# que le frontend local lui parler (avant : ["*"], n'importe quel site
+# ouvert dans le navigateur pouvait requêter localhost:8000).
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 
 app.add_middleware(
     CORSMiddleware,
@@ -140,7 +146,7 @@ async def sumItems():
 async def addItem(item : Item):
     con = sqlite3.connect("inventory.db")
     cur = con.cursor()
-    alreadyExists = cur.execute(f"SELECT COUNT(name) FROM inventory WHERE name='{item.name}'").fetchone()
+    alreadyExists = cur.execute("SELECT COUNT(name) FROM inventory WHERE name=?", (item.name,)).fetchone()
     if alreadyExists[0] != 0:
         cur.execute("INSERT INTO inventory (name, purchasePrice, number) VALUES(?,?,?)", [item.name, item.purchasePrice, item.number])
         con.commit()
@@ -161,9 +167,9 @@ async def addItem(item : Item):
 async def removeItem(item : Item):
     con = sqlite3.connect("inventory.db")
     cur = con.cursor()
-    alreadyExists = cur.execute(f"SELECT COUNT(name) FROM inventory WHERE name='{item.name}'").fetchone()
+    alreadyExists = cur.execute("SELECT COUNT(name) FROM inventory WHERE name=?", (item.name,)).fetchone()
     if alreadyExists[0] != 0:
-        cur.execute(f"DELETE FROM inventory WHERE name='{item.name}'")
+        cur.execute("DELETE FROM inventory WHERE name=?", (item.name,))
         con.commit()
         con.close()
         return {"Executed" : True}
@@ -178,7 +184,7 @@ async def updateItem(item : Item):
         return {"Executed" : True}
     con = sqlite3.connect("inventory.db")
     cur = con.cursor()
-    alreadyExists = cur.execute(f"SELECT COUNT(name) FROM inventory WHERE name='{item.name}'").fetchone()
+    alreadyExists = cur.execute("SELECT COUNT(name) FROM inventory WHERE name=?", (item.name,)).fetchone()
     if alreadyExists[0] != 0:
         if item.name:
             cur.execute(f"UPDATE inventory SET purchasePrice=?, number=?, listedPrice=? WHERE name=?", [item.purchasePrice, item.number, item.listedPrice, item.name])
@@ -196,11 +202,11 @@ async def updateItem(item : Item):
 async def sellItem(item : Item):
     con = sqlite3.connect("inventory.db")
     cur = con.cursor()
-    alreadyExists = cur.execute(f"SELECT COUNT(name) FROM inventory WHERE name='{item.name}'").fetchone()
+    alreadyExists = cur.execute("SELECT COUNT(name) FROM inventory WHERE name=?", (item.name,)).fetchone()
     if alreadyExists[0] != 0:
         cur.execute("UPDATE inventory SET number=number-1 WHERE name=?", [item.name])
         con.commit()
-        numLeft = cur.execute(f"SELECT SUM(number) FROM inventory WHERE name='{item.name}'").fetchone()[0]
+        numLeft = cur.execute("SELECT SUM(number) FROM inventory WHERE name=?", (item.name,)).fetchone()[0]
         con.close()
         if (numLeft == 0):
             await removeItem(item)
@@ -228,7 +234,7 @@ def get_order_data(t : Transact):
 def delete_order(t : Transact):
     con = sqlite3.connect("inventory.db")
     cur = con.cursor()
-    numLeft = cur.execute(f"SELECT SUM(number) FROM inventory WHERE name='{t.name}'").fetchone()[0]
+    numLeft = cur.execute("SELECT SUM(number) FROM inventory WHERE name=?", (t.name,)).fetchone()[0]
     con.close()
     if numLeft != 1:
         return {"message": "Not deleting order since you have may of these left"}

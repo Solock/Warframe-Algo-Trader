@@ -9,7 +9,7 @@
     "dryRun" : true,
     "priceShiftThreshold" : -1,
     "avgPriceCap" : 600,
-    "maxTotalPlatCap": 100000,
+    "maxTotalPlatCap": 1000,
     "volumeThreshold" : 15,
     "rangeThreshold" : 10,
     "pingOnNotif" : true
