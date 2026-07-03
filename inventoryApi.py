@@ -92,7 +92,7 @@ screenReaderProcess = None
 
 @app.get("/testlog")
 async def testLog():
-    #p = subprocess.Popen(["python", "sandbox.py"])
+    #p = subprocess.Popen([sys.executable, "sandbox.py"])
     logging.debug("Testing debug.")
     logging.info("Testing info.")
     logging.warning("Testing warning! Check console!")
@@ -343,7 +343,7 @@ def start_live_scraper():
     if config.getConfigStatus("runningLiveScraper") or liveScraperProcess != None:
         return {"Executed" : False, "Reason" : "Scraper already running"}
     else:
-        liveScraperProcess = subprocess.Popen(["python", "LiveScraper.py"])
+        liveScraperProcess = subprocess.Popen([sys.executable, "LiveScraper.py"])
         config.setConfigStatus("runningLiveScraper", True)
         f = open("tradeLog.txt", "w")
         f.write(f"Starting log file at {datetime.now()}\n")
@@ -371,7 +371,7 @@ def start_stats_scraper():
     if config.getConfigStatus("runningStatisticsScraper"):
         return {"Executed" : False, "Reason" : "Scraper already running"}
     else:
-        statisticsScraperProcess = subprocess.Popen(["python", "StatsScraper.py"])
+        statisticsScraperProcess = subprocess.Popen([sys.executable, "StatsScraper.py"])
         config.setConfigStatus("runningStatisticsScraper", True)
         return {"Executed": True}
 
@@ -395,7 +395,7 @@ def start_screen_reader():
         return {"Executed" : False, "Reason" : "Scraper already running"}
     else:
         config.setConfigStatus("runningWarframeScreenDetect", True)
-        screenReaderProcess = subprocess.Popen(["python", "EEParser.py"])
+        screenReaderProcess = subprocess.Popen([sys.executable, "EEParser.py"])
         return {"Executed": True}
 
 @app.post("/screen_reader/stop")
@@ -413,7 +413,7 @@ def write_graph_to_file(startDate : str | None = None, endDate : str | None = No
         startDate = "1990"
     if endDate == None or endDate == "":
         endDate = "3000"
-    imgGen = subprocess.run(["python", "GenerateProfitFigure.py", startDate, endDate])
+    imgGen = subprocess.run([sys.executable, "GenerateProfitFigure.py", startDate, endDate])
     with open("accValue.png", "rb") as f:
         # Read the contents of the file
         image_data = f.read()

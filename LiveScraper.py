@@ -28,8 +28,11 @@ def ignoreItems(itemName, settings):
 
 def getWeekIncrease(df, row):
     weekDF = pd.DataFrame(df[(df.get("name") == row["name"]) & (df.get("order_type") == "closed")]
-                         ).sort_values(by='datetime').reset_index().drop("index", axis=1)
-    change = weekDF.loc[6, "median"] - weekDF.loc[0, "median"]
+                         ).sort_values(by='datetime').reset_index(drop=True)
+    # un trou dans les données relics.run ne doit pas tuer le scraper
+    if len(weekDF) < 2:
+        return 0
+    change = weekDF.loc[len(weekDF) - 1, "median"] - weekDF.loc[0, "median"]
     return change
 
 def getBuySellOverlap(settings):
@@ -491,46 +494,50 @@ try:
             if not config.getConfigStatus("runningLiveScraper"):
                 break
 
-            con = sqlite3.connect('inventory.db')
+            # un item qui plante (API, données) ne doit pas tuer la boucle
+            try:
+                con = sqlite3.connect('inventory.db')
 
-            inventory = pd.read_sql_query("SELECT * FROM inventory", con)
-            con.close()
-            inventory = inventory[inventory.get("number") > 0]
+                inventory = pd.read_sql_query("SELECT * FROM inventory", con)
+                con.close()
+                inventory = inventory[inventory.get("number") > 0]
 
-            liveOrderDF = getFilteredDF(item)
-            if liveOrderDF.empty:
-                logging.debug("There was an error with seeing the live orders on this item.")
-                continue
-
-            if item not in list(buySellOverlap.index):
-                itemID = SLUG_TO_ID.get(item)
-                if itemID is None:
-                    logging.debug(f"Unknown item {item}, skipping.")
+                liveOrderDF = getFilteredDF(item)
+                if liveOrderDF.empty:
+                    logging.debug("There was an error with seeing the live orders on this item.")
                     continue
-                details = wfm.getItemDetails(item)
-                modRank = details.get("maxRank") if details else None
-                compareLiveOrdersWhenSelling(item, liveOrderDF, None, currentOrders, itemID, modRank, settings)
 
+                if item not in list(buySellOverlap.index):
+                    itemID = SLUG_TO_ID.get(item)
+                    if itemID is None:
+                        logging.debug(f"Unknown item {item}, skipping.")
+                        continue
+                    details = wfm.getItemDetails(item)
+                    modRank = details.get("maxRank") if details else None
+                    compareLiveOrdersWhenSelling(item, liveOrderDF, None, currentOrders, itemID, modRank, settings)
+
+                    continue
+
+                itemStats = buySellOverlap.loc[item]
+                logging.debug(item.replace("_", " ").title() + f"(closedAvg: {round(itemStats['closedAvg'], 2)}):")
+
+                itemID = getItemId(item)
+                modRank = getItemRank(buySellOverlap, item)
+
+                newBuyOrderDf = compareLiveOrdersWhenBuying(item, liveOrderDF, itemStats, currentOrders, myBuyOrdersDF, itemID, modRank, settings)
+                if isinstance(newBuyOrderDf, pd.DataFrame):
+                    myBuyOrdersDF = newBuyOrderDf
+                compareLiveOrdersWhenSelling(item, liveOrderDF, itemStats, currentOrders, itemID, modRank, settings)
+            except Exception as err:
+                logging.warning(f"Item {item} en erreur ({type(err).__name__}: {err}), on continue.")
+                customLogger.writeTo("orderTracker.log", f"SKIP\tItem:{item}\t{type(err).__name__}: {err}")
                 continue
-
-            itemStats = buySellOverlap.loc[item]
-            logging.debug(item.replace("_", " ").title() + f"(closedAvg: {round(itemStats['closedAvg'], 2)}):")
-
-            itemID = getItemId(item)
-            modRank = getItemRank(buySellOverlap, item)
-
-            newBuyOrderDf = compareLiveOrdersWhenBuying(item, liveOrderDF, itemStats, currentOrders, myBuyOrdersDF, itemID, modRank, settings)
-            if isinstance(newBuyOrderDf, pd.DataFrame):
-                myBuyOrdersDF = newBuyOrderDf
-            compareLiveOrdersWhenSelling(item, liveOrderDF, itemStats, currentOrders, itemID, modRank, settings)
 
 except OSError as err:
-    config.setConfigStatus("runningLiveScraper", False)
-    logging.debug(f"OS error: {err}")
+    logging.error(f"OS error: {err}")
 except Exception as err:
-    config.setConfigStatus("runningLiveScraper", False)
-    logging.debug(f"Unexpected {err=}, {type(err)=}")
+    logging.error(f"Unexpected {err=}, {type(err)=}")
     customLogger.writeTo("orderTracker.log", f"Error in LiveScraper: Unexpected {err=}, {type(err)=}")
-    raise Exception(f"Unexpected {err=}, {type(err)=}")
-
-config.setConfigStatus("runningLiveScraper", False)
+    raise
+finally:
+    config.setConfigStatus("runningLiveScraper", False)

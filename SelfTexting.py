@@ -1,8 +1,15 @@
+import logging
+
 import requests
-import time
+
 import config
 
+
 def send_push(title, message):
+    """Notification Pushbullet, best-effort : ne lève jamais."""
+    if not config.pb_token:
+        return
+
     headers = {
         'Access-Token': config.pb_token,
         'Content-Type': 'application/json',
@@ -14,10 +21,12 @@ def send_push(title, message):
         'type': 'note',
         'device_iden' : config.pushbutton_device_iden
     }
-    
-    response = requests.post('https://api.pushbullet.com/v2/pushes', headers=headers, json=json_data)
+
+    try:
+        requests.post('https://api.pushbullet.com/v2/pushes', headers=headers, json=json_data, timeout=10)
+    except requests.RequestException as err:
+        logging.debug(f"Pushbullet injoignable : {err}")
 
 
-if __name__ == "__main__" and '__file__' not in globals():
-    time.sleep(10)
+if __name__ == "__main__":
     send_push("test", "test config")
