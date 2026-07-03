@@ -315,7 +315,10 @@ def compareLiveOrdersWhenBuying(item, liveOrderDF, itemStats, currentOrders, myB
             wfm.updateListing(myOrderID, postPrice, 1, visibility, item, "buy")
             return
         else:
-            wfm.postOrder(itemID, orderType, postPrice, 1, True, modRank, item)
+            response = wfm.postOrder(itemID, orderType, postPrice, 1, True, modRank, item)
+            if response.status_code != 200:
+                logging.warning(f"Ordre {orderType} refusé par wfm pour {item} (HTTP {response.status_code}) — voir logs/wfmAPICalls.log")
+                return
             logging.debug(f"AUTOMATICALLY POSTED VISIBLE {orderType.upper()} ORDER FOR {postPrice}")
             return
     elif numBuyers == 0:
@@ -417,7 +420,10 @@ def compareLiveOrdersWhenSelling(item, liveOrderDF, itemStats, currentOrders, it
             wfm.updateListing(myOrderID, postPrice, myQuantity, visibility, item, "sell")
             return
         else:
-            wfm.postOrder(itemID, orderType, postPrice, myQuantity, True, modRank, item)
+            response = wfm.postOrder(itemID, orderType, postPrice, myQuantity, True, modRank, item)
+            if response.status_code != 200:
+                logging.warning(f"Ordre sell refusé par wfm pour {item} (HTTP {response.status_code}) — voir logs/wfmAPICalls.log")
+                return
             updateDBPrice(item, postPrice)
             return
     bestSeller = liveSellerDF.iloc[0]
@@ -451,6 +457,9 @@ def compareLiveOrdersWhenSelling(item, liveOrderDF, itemStats, currentOrders, it
             return
     else:
         response = wfm.postOrder(itemID, orderType, int(postPrice), myQuantity, True, modRank, item)
+        if response.status_code != 200:
+            logging.warning(f"Ordre {orderType} refusé par wfm pour {item} (HTTP {response.status_code}) — voir logs/wfmAPICalls.log")
+            return
         updateDBPrice(item, int(postPrice))
         logging.debug(f"AUTOMATICALLY POSTED VISIBLE {orderType.upper()} ORDER FOR {postPrice}")
         return
