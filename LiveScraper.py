@@ -278,6 +278,21 @@ def compareLiveOrdersWhenBuying(item, liveOrderDF, itemStats, currentOrders, myB
     myOrderID, visibility, myPlatPrice, myOrderActive = getMyOrderInformation(item, orderType, currentOrders)
     liveBuyerDF, liveSellerDF, numBuyers, numSellers, priceRange = restructureLiveOrderDF(liveOrderDF)
 
+    # Garde budget : un ordre d'achat est un ENGAGEMENT à honorer (CGU wf.market).
+    # Le total de mes achats en cours + ce nouvel ordre ne doit jamais dépasser
+    # maxTotalPlatCap (= le plat réellement disponible). Couvre TOUTES les voies
+    # d'achat, y compris "aucun autre acheteur" que le knapsack ne voyait pas.
+    committedPlat = 0
+    if myBuyOrdersDF is not None and myBuyOrdersDF.shape[0] != 0:
+        committedPlat = myBuyOrdersDF[myBuyOrdersDF["url_name"] != item]["platinum"].sum()
+    budgetRemaining = settings["maxTotalPlatCap"] - committedPlat
+
+    def buyFitsBudget(price):
+        if price > budgetRemaining:
+            logging.debug(f"Budget insuffisant pour {item} ({price} plat, reste {budgetRemaining}). Pas d'ordre d'achat.")
+            return False
+        return True
+
     if myOrderActive:
         if myPlatPrice > settings["avgPriceCap"]:
             wfm.deleteOrder(myOrderID)
@@ -292,6 +307,10 @@ def compareLiveOrdersWhenBuying(item, liveOrderDF, itemStats, currentOrders, myB
             return
         if postPrice < 1:
             postPrice = 1
+        if not buyFitsBudget(postPrice):
+            if myOrderActive:
+                wfm.deleteOrder(myOrderID)
+            return
         if myOrderActive:
             wfm.updateListing(myOrderID, postPrice, 1, visibility, item, "buy")
             return
@@ -318,6 +337,10 @@ def compareLiveOrdersWhenBuying(item, liveOrderDF, itemStats, currentOrders, myB
         return
 
     if (closedAvgMetric >= 0 and priceRange >= 21):
+        if not buyFitsBudget(postPrice):
+            if myOrderActive:
+                wfm.deleteOrder(myOrderID)
+            return
         if myOrderActive:
             if (myPlatPrice != (postPrice)):
                 logging.debug(f"AUTOMATICALLY UPDATED {orderType.upper()} ORDER FROM {myPlatPrice} TO {postPrice}")
