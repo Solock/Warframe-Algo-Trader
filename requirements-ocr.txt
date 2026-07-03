@@ -1,0 +1,5 @@
+# Windows-only deps for AutoScanWarframe.py (OCR whisper detection).
+# Not needed to run the trader itself; EEParser.py (log-based detection) has no extra deps.
+opencv-python>=4.8.0
+PyAutoGUI==0.9.54
+pytesseract==0.3.10
