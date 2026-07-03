@@ -1,42 +1,42 @@
 import json
-conf = open("config.json")
-configData = json.load(conf)
-conf.close()
+
+with open("config.json") as conf:
+    configData = json.load(conf)
+
 
 def getConfigStatus(key):
-    f = open("config.json")
-    configData = json.load(f)
-    f.close()
-    return configData[key]
+    with open("config.json") as f:
+        return json.load(f)[key]
+
 
 def setConfigStatus(key, value):
-    f = open("config.json")
-    configData = json.load(f)
-    f.close()
-    configData[key] = value
+    with open("config.json") as f:
+        data = json.load(f)
+    data[key] = value
     with open("config.json", "w") as outfile:
-        outfile.write(json.dumps(configData, indent=4))
-    return
+        outfile.write(json.dumps(data, indent=4))
 
 
-pb_token = configData["pushbutton_token"]
-pushbutton_device_iden = configData["pushbutton_device_iden"]
-jwt_token = configData["wfm_jwt_token"]
-jwt_token = "JWT " + jwt_token.split(" ")[-1]
-inGameName = configData['inGameName']
-platform = configData['platform'].lower()
-webhookLink = configData["webhookLink"]
-# Read JSON file
-with open('settings.json') as settings:
+pb_token = configData.get("pushbutton_token", "")
+pushbutton_device_iden = configData.get("pushbutton_device_iden", "")
+
+# Le token peut être stocké avec ou sans préfixe "JWT " (héritage v1).
+# L'API v2 attend "Authorization: Bearer <token brut>".
+wfm_token = configData.get("wfm_jwt_token", "").split(" ")[-1]
+
+inGameName = configData.get("inGameName", "")
+platform = configData.get("platform", "pc").lower() or "pc"
+webhookLink = configData.get("webhookLink", "")
+
+with open("settings.json") as settings:
     data = json.load(settings)
 
-# Extract values and initialize variables
-blacklistedItems = data['blacklistedItems']
-whitelistedItems = data['whitelistedItems']
-strictWhitelist = data['strictWhitelist']
-priceShiftThreshold = data['priceShiftThreshold']
-avgPriceCap = data['avgPriceCap']
-maxTotalPlatCap = data['maxTotalPlatCap']
-volumeThreshold = data['volumeThreshold']
-rangeThreshold = data['rangeThreshold']
-pingOnNotif = data["pingOnNotif"]
+blacklistedItems = data.get("blacklistedItems", [])
+whitelistedItems = data.get("whitelistedItems", [])
+strictWhitelist = data.get("strictWhitelist", False)
+priceShiftThreshold = data.get("priceShiftThreshold", -1)
+avgPriceCap = data.get("avgPriceCap", 600)
+maxTotalPlatCap = data.get("maxTotalPlatCap", 1000)
+volumeThreshold = data.get("volumeThreshold", 15)
+rangeThreshold = data.get("rangeThreshold", 10)
+pingOnNotif = data.get("pingOnNotif", False)

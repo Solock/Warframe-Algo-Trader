@@ -1,32 +1,35 @@
-from fastapi import FastAPI, status, HTTPException, Request
-from fastapi.responses import ORJSONResponse
+from contextlib import asynccontextmanager
+
+from fastapi import Body, FastAPI, HTTPException
 from pydantic import BaseModel
-import csv
 import sqlite3
 import sys
 from fastapi.middleware.cors import CORSMiddleware
-import requests
 from datetime import datetime
 import config
-import uvicorn
 import logging
 import json
 import subprocess
 import io
 import time
 from fastapi.responses import StreamingResponse
-from AccessingWFMarket import *
+import AccessingWFMarket as wfm
 from typing import Any, Dict, List, Union
 
 logging.basicConfig(format='{levelname:7} {message}', style='{', level=logging.DEBUG)
 
 
-f = open("config.json")
-configData = json.load(f)
-f.close()
-jwt_token = configData["wfm_jwt_token"]
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    import signal
+    signal.signal(signal.SIGINT, receive_signal)
+    config.setConfigStatus("runningWarframeScreenDetect", False)
+    config.setConfigStatus("runningLiveScraper", False)
+    config.setConfigStatus("runningStatisticsScraper", False)
+    yield
 
-app = FastAPI()
+
+app = FastAPI(lifespan=lifespan)
 
 origins = ["*"]
 
@@ -87,20 +90,6 @@ liveScraperProcess = None
 statisticsScraperProcess = None
 screenReaderProcess = None
 
-@app.on_event("startup")
-async def startup_event():
-    import signal
-    signal.signal(signal.SIGINT, receive_signal)
-    #logger = logging.getLogger("uvicorn.access")
-    #handler = logging.StreamHandler()
-    #handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-    #logger.addHandler(handler)
-
-    config.setConfigStatus("runningWarframeScreenDetect", False)
-    config.setConfigStatus("runningLiveScraper", False)
-    config.setConfigStatus("runningStatisticsScraper", False)
-    # startup tasks
-
 @app.get("/testlog")
 async def testLog():
     #p = subprocess.Popen(["python", "sandbox.py"])
@@ -120,10 +109,10 @@ async def root():
 async def get_a_list_of_names_of_all_tradable_items():
     global itemNameList
     if len(itemNameList) == 0:
-        allItemsLink = "https://api.warframe.market/v1/items"
-        r = requests.get(allItemsLink)
-        itemList = r.json()["payload"]["items"]
-        itemNameList = sorted([x["url_name"] for x in itemList])
+        try:
+            itemNameList = sorted(item["slug"] for item in wfm.getAllItems())
+        except Exception as err:
+            raise HTTPException(status_code=502, detail=f"warframe.market injoignable : {err}")
     return {"item_names" : itemNameList}
 
 @app.get("/items")
@@ -222,31 +211,17 @@ async def sellItem(item : Item):
         return {"Executed" : False, "Reason": "Item not in database."}
 
 def get_order_data(t : Transact):
-    url = f"https://api.warframe.market/v1/profile/{config.inGameName}/orders"
-
-    headers = {
-        "Content-Type": "application/json; utf-8",
-        "Accept": "application/json",
-        "auth_type": "header",
-        "platform": config.platform,
-        "language": "en",
-        "Authorization" : jwt_token
-    }
-
-    response = requests.get(url, headers=headers)
-
-    if response.status_code == 200:
-        data = response.json()
-        orders = data["payload"][f"{t.transaction_type}_orders"]
-
-        for order in orders:
-            if order["item"]["url_name"] == t.name:
-                return order["id"], order['platinum'], order["quantity"]
-
-        # If no matching order found
+    try:
+        orders = wfm.getOrders()[f"{t.transaction_type}_orders"]
+    except Exception as err:
+        logging.error(f"get_order_data: {err}")
         return None, None, None
 
-    # If API call failed
+    for order in orders:
+        if order["item"]["url_name"] == t.name:
+            return order["id"], order['platinum'], order["quantity"]
+
+    # If no matching order found
     return None, None, None
 
 @app.put("/market/delete")
@@ -261,28 +236,14 @@ def delete_order(t : Transact):
     # Make the DELETE API call
     order_id, order_plat, order_quant = get_order_data(t)
 
-    time.sleep(0.33)
-    
     if order_id is None:
         raise HTTPException(
             status_code=400,
             detail=f'Something went getting the id of this order.',
         )
 
-    
-    delete_url = f"https://api.warframe.market/v1/profile/orders/{order_id}"
-    
-    headers = {
-        "Content-Type": "application/json; utf-8",
-        "Accept": "application/json",
-        "auth_type": "header",
-        "platform": config.platform,
-        "language": "en",
-        "Authorization": jwt_token,
-    }
-    
-    response = requests.delete(delete_url, headers=headers)
-    
+    response = wfm.deleteOrder(order_id)
+
     if response.status_code == 200:
         return {"message": "Order deleted successfully"}
     else:
@@ -297,31 +258,15 @@ def close_order(t : Transact):
     # Make the DELETE API call
     order_id, order_plat, order_quant = get_order_data(t)
 
-    time.sleep(0.33)
-    
     if order_id is None:
         return {"message": "Order not found"}
 
-
     if order_plat != t.price:
-        updateListing(order_id, t.price, order_quant, True, t.name, t.transaction_type)
-        time.sleep(0.33)
+        wfm.updateListing(order_id, t.price, order_quant, True, t.name, t.transaction_type)
 
+    # v2 : clôture explicite d'une unité (enregistre la transaction côté wfm)
+    response = wfm.closeOrder(order_id, quantity=1)
 
-    close_url = f"https://api.warframe.market/v1/profile/orders/close/{order_id}"
-    
-    headers = {
-            "Content-Type": "application/json; utf-8",
-            "Accept": "application/json",
-            "auth_type": "header",
-            "platform": config.platform,
-            "language": "en",
-            "Authorization": config.jwt_token,
-            'User-Agent': 'Warframe Algo Trader/1.2.8',
-        }
-    
-    response = requests.put(close_url, headers=headers, json={})
-    
     if response.status_code == 200:
         return {"message": "Order closed successfully"}
     else:
@@ -486,7 +431,7 @@ def get_settings():
     return data
 
 @app.put("/settings")
-async def put_settings(request: Union[List,Dict,Any]=None):
+async def put_settings(request: Union[List, Dict, Any] = Body(None)):
     newSettings = json.dumps(request, indent=4)
     with open("settings.json", "w") as settings:
         settings.write(newSettings)

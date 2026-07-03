@@ -1,10 +1,7 @@
 import pandas as pd
 import sqlite3
-import json, requests, time
-from pprint import pprint
-from IPython.display import clear_output
-import sqlite3
-from AccessingWFMarket import *
+import json, time
+import AccessingWFMarket as wfm
 import SelfTexting
 import config
 import numpy as np
@@ -47,15 +44,10 @@ def getBuySellOverlap(settings):
             customLogger.writeTo("orderTracker.log", f"LiveScraper Stopped. No file called allItemData.csv or allItemDataBackup.csv found. Let the Stats Scraper run to completion")
             raise Exception("LiveScraper Stopped. No file called allItemData.csv or allItemDataBackup.csv found. Let the Stats Scraper run to completion.")
 
-    #volFilter = 15
-    #rangeFilter = 10
-
     averaged_df = df.drop(["datetime", "item_id"], axis=1)
     averaged_df = averaged_df.groupby(['name', 'order_type']).mean().reset_index()
 
-    # Create your connection.
     con = sqlite3.connect('inventory.db')
-
     inventory = pd.read_sql_query("SELECT * FROM inventory", con)
     con.close()
     inventory = inventory[inventory.get("number") > 0]
@@ -157,37 +149,37 @@ def getItemRank(buySellOverlap, url_name):
         return buySellOverlap.loc[url_name, "mod_rank"]
 
 def deleteAllOrders(settings):
-    currentOrders = getOrders()
+    currentOrders = wfm.getOrders()
     for order in currentOrders["sell_orders"]:
         if config.getConfigStatus("runningLiveScraper") and not ignoreItems(order["item"]["url_name"], settings):
-            #logging.debug(order)
             updateDBPrice(order["item"]["url_name"], None)
-            deleteOrder(order["id"])
+            wfm.deleteOrder(order["id"])
     for order in currentOrders["buy_orders"]:
         if config.getConfigStatus("runningLiveScraper") and not ignoreItems(order["item"]["url_name"], settings):
-            deleteOrder(order["id"])
+            wfm.deleteOrder(order["id"])
 
 def getFilteredDF(item):
-    r = warframeApi.get(f"https://api.warframe.market/v1/items/{item}/orders")
-    customLogger.writeTo(
-        "wfmAPICalls.log",
-        f"GET:https://api.warframe.market/v1/items/{item}/orders\tResponse:{r.status_code}"
-    )
-    logging.debug(r)
-    try:
-        data = r.json()
-    except:
+    orders = wfm.getPublicOrders(item)
+    if not orders:
         return pd.DataFrame()
-    data = data["payload"]["orders"]
-    df = pd.DataFrame.from_dict(data)
-    df["status"] = df.apply(lambda row : row["user"]["status"], axis=1)
-    df["username"] = df.apply(lambda row : row["user"]["ingame_name"], axis=1)
+    rows = []
+    for order in orders:
+        user = order.get("user") or {}
+        rows.append({
+            "order_type": order.get("type"),
+            "platinum": order.get("platinum"),
+            "quantity": order.get("quantity"),
+            "visible": order.get("visible"),
+            "status": user.get("status"),
+            "username": user.get("ingameName"),
+            "mod_rank": order.get("rank", np.nan),
+        })
+    df = pd.DataFrame(rows)
     df = df[df.get("status") == "ingame"]
-    
-    if "mod_rank" in df.columns:
-        df = df[df.get("mod_rank") == pd.Series.max(df["mod_rank"])]
-    else:
-        pass
+
+    # Pour les items à rang, on ne compare que les ordres au rang max (comme en v1)
+    if df["mod_rank"].notna().any():
+        df = df[df.get("mod_rank") == df["mod_rank"].max()]
     return df
 
 
@@ -196,7 +188,6 @@ def getFilteredDF(item):
 def getMyOrderInformation(item, orderType, currentOrders):
     myOrdersDF = pd.DataFrame.from_dict(currentOrders[f'{orderType}_orders'])
     myOrderActive = False
-        #inventory = pd.read_csv("inventory.csv")
     myOrderID = None
     visibility = None
     myPlatPrice = None
@@ -204,13 +195,13 @@ def getMyOrderInformation(item, orderType, currentOrders):
     if myOrdersDF.shape[0] != 0:
         myOrdersDF["url_name"] = myOrdersDF.apply(lambda row : row["item"]["url_name"], axis=1)
         myOrdersDF = myOrdersDF[myOrdersDF.get("url_name") == item].reset_index()
-    
+
     if myOrdersDF.shape[0] != 0:
         myOrderID = myOrdersDF.loc[0, "id"]
         visibility = myOrdersDF.loc[0, "visible"]
         myPlatPrice = myOrdersDF.loc[0, "platinum"]
         myOrderActive = True
-    
+
     return myOrderID, visibility, myPlatPrice, myOrderActive
 
 def restructureLiveOrderDF(liveOrderDF):
@@ -255,19 +246,19 @@ def knapsack(items, max_weight):
             selected_items.append(items[i - 1])
             w -= items[i - 1][0]
         else:
-            unselected_items.append(items[i - 1])  # Append the item name to the unselected_items list
+            unselected_items.append(items[i - 1])
 
     return dp[n][max_weight], selected_items, unselected_items
 
-def get_new_buy_data(myBuyOrdersDF, response, itemStats):
-    newBuyOrderDF = pd.DataFrame.from_dict(response["order"])
-    if newBuyOrderDF.shape[0] != 0:
-        newBuyOrderDF["url_name"] = newBuyOrderDF["item"]["url_name"]
-        newBuyOrderDF = newBuyOrderDF.iloc[0].to_frame().T
-        newBuyOrderDF["potential_profit"] = itemStats['closedAvg'] - newBuyOrderDF["platinum"]
-            
-    myBuyOrdersDF = pd.concat([newBuyOrderDF,myBuyOrdersDF], ignore_index=True, axis=0)
-    return myBuyOrdersDF
+def get_new_buy_data(myBuyOrdersDF, order, itemStats, item):
+    # order = Order v2 (dict) renvoyé par POST /v2/order
+    newRow = pd.DataFrame([{
+        "id": order["id"],
+        "platinum": order["platinum"],
+        "url_name": item,
+        "potential_profit": itemStats["closedAvg"] - order["platinum"],
+    }])
+    return pd.concat([newRow, myBuyOrdersDF], ignore_index=True, axis=0)
 
 
 
@@ -286,7 +277,7 @@ def compareLiveOrdersWhenBuying(item, liveOrderDF, itemStats, currentOrders, myB
 
     if myOrderActive:
         if myPlatPrice > settings["avgPriceCap"]:
-            deleteOrder(myOrderID)
+            wfm.deleteOrder(myOrderID)
     #probably don't want to be looking at this item right now if there's literally nobody interested in selling it.
     if numSellers == 0:
         return
@@ -299,10 +290,10 @@ def compareLiveOrdersWhenBuying(item, liveOrderDF, itemStats, currentOrders, myB
         if postPrice < 1:
             postPrice = 1
         if myOrderActive:
-            updateListing(myOrderID, postPrice, 1, str(visibility), item, "buy")
+            wfm.updateListing(myOrderID, postPrice, 1, visibility, item, "buy")
             return
         else:
-            postOrder(itemID, orderType, postPrice, 1, True, modRank, item)
+            wfm.postOrder(itemID, orderType, postPrice, 1, True, modRank, item)
             logging.debug(f"AUTOMATICALLY POSTED VISIBLE {orderType.upper()} ORDER FOR {postPrice}")
             return
     elif numBuyers == 0:
@@ -320,26 +311,22 @@ def compareLiveOrdersWhenBuying(item, liveOrderDF, itemStats, currentOrders, myB
         logging.debug("You're holding too many of this item! Not putting up a buy order.")
         if myOrderActive:
             logging.debug("In fact you have a buy order up for this item! Deleting it.")
-            deleteOrder(myOrderID)
+            wfm.deleteOrder(myOrderID)
         return
-    
+
     if (closedAvgMetric >= 0 and priceRange >= 21):
         if myOrderActive:
             if (myPlatPrice != (postPrice)):
-                #need to edit such that updated listing does not exceed budget
                 logging.debug(f"AUTOMATICALLY UPDATED {orderType.upper()} ORDER FROM {myPlatPrice} TO {postPrice}")
-                updateListing(myOrderID, str(postPrice), 1, str(visibility), item, "buy")
+                wfm.updateListing(myOrderID, postPrice, 1, visibility, item, "buy")
                 myBuyOrdersDF.loc[myBuyOrdersDF["url_name"] == item,"platinum"] = postPrice
                 myBuyOrdersDF.loc[myBuyOrdersDF["url_name"] == item,"potential_profit"] = myBuyOrdersDF.loc[myBuyOrdersDF["url_name"] == item]["potential_profit"] - (postPrice - myPlatPrice)
                 return myBuyOrdersDF
             else:
-                updateListing(myOrderID, str(postPrice), 1, str(visibility), item, "buy")
+                wfm.updateListing(myOrderID, postPrice, 1, visibility, item, "buy")
                 logging.debug(f"Your current (possibly hidden) posting on this item for {myPlatPrice} plat is a good one. Recommend to make visible.")
                 return
         else:
-            # if limit_max_plat_listings(myBuyOrdersDF, postPrice):
-            #     return
-
             # Convert DataFrame to a list of tuples (platinum, potential_profit, url_name, id)
             buyOrdersList = []
             if myBuyOrdersDF.shape[0] != 0:
@@ -355,14 +342,14 @@ def compareLiveOrdersWhenBuying(item, liveOrderDF, itemStats, currentOrders, myB
                     myBuyOrdersDF = myBuyOrdersDF[~(myBuyOrdersDF["url_name"].isin(unSelectedItemNames))]
 
                     for unselectedItem in unselectedBuyOrders:
-                        deleteOrder(unselectedItem[3])
+                        wfm.deleteOrder(unselectedItem[3])
                         logging.debug(f"DELETED BUY order for {unselectedItem[2]} since it is not as optimal")
 
-                response = postOrder(itemID, orderType, str(postPrice), str(1), True, modRank, item)
+                response = wfm.postOrder(itemID, orderType, postPrice, 1, True, modRank, item)
                 if response.status_code != 200:
                     return
-                response = response.json()["payload"]
-                myBuyOrdersDF = get_new_buy_data(myBuyOrdersDF, response, itemStats)
+                newOrder = response.json()["data"]
+                myBuyOrdersDF = get_new_buy_data(myBuyOrdersDF, newOrder, itemStats, item)
                 logging.debug(f"AUTOMATICALLY POSTED VISIBLE {orderType.upper()} ORDER FOR {postPrice}")
                 return myBuyOrdersDF
             else:
@@ -371,7 +358,7 @@ def compareLiveOrdersWhenBuying(item, liveOrderDF, itemStats, currentOrders, myB
     elif myOrderActive:
         logging.debug(f"Not a good time to have an order up on this item. Deleted {orderType} order for {myPlatPrice}")
         logging.debug(f"Current highest buyer is:{bestBuyer['platinum']}")
-        deleteOrder(myOrderID)
+        wfm.deleteOrder(myOrderID)
         return
 
 
@@ -388,30 +375,29 @@ def compareLiveOrdersWhenSelling(item, liveOrderDF, itemStats, currentOrders, it
         return
     elif (not (item in inventory["name"].unique())):
         updateDBPrice(myOrderID, None)
-        deleteOrder(myOrderID)
+        wfm.deleteOrder(myOrderID)
         logging.debug(f"Deleted sell order for {item} since this is not in your inventory.")
         return
-    
+
     inventory = inventory[inventory["name"] == item]
     liveBuyerDF, liveSellerDF, numBuyers, numSellers, priceRange = restructureLiveOrderDF(liveOrderDF)
 
-    #probably don't want to be looking at this item right now if there's literally nobody interested in selling it.
     avgCost = (inventory["purchasePrice"] * inventory["number"]).sum() / inventory["number"].sum()
     myQuantity = inventory["number"].sum()
     if numSellers == 0:
         postPrice = int(avgCost+30)
         if myOrderActive:
             updateDBPrice(item, postPrice)
-            updateListing(myOrderID, postPrice, myQuantity, str(visibility), item, "sell")
+            wfm.updateListing(myOrderID, postPrice, myQuantity, visibility, item, "sell")
             return
         else:
-            postOrder(itemID, orderType, postPrice, str(myQuantity), str(True), modRank, item)
+            wfm.postOrder(itemID, orderType, postPrice, myQuantity, True, modRank, item)
             updateDBPrice(item, postPrice)
             return
     bestSeller = liveSellerDF.iloc[0]
     postPrice = bestSeller['platinum']
     inventory = inventory[inventory.get("name") == item].reset_index()
-    
+
 
     if bestSeller["platinum"] - avgCost <= -10:
         SelfTexting.send_push("EMERGENCY", f"The price of {item} is probably dropping and you should sell this to minimize losses asap")
@@ -420,35 +406,36 @@ def compareLiveOrdersWhenSelling(item, liveOrderDF, itemStats, currentOrders, it
         postPrice = max([avgCost + 10, liveSellerDF.iloc[1]['platinum']])
     else:
         postPrice = max([avgCost + 10, postPrice])
-        
+
     if myOrderActive:
         if (myPlatPrice != (postPrice)):
             logging.debug(f"AUTOMATICALLY UPDATED {orderType.upper()} ORDER FROM {myPlatPrice} TO {postPrice}")
             updateDBPrice(item, int(postPrice))
-            updateListing(myOrderID, str(int(postPrice)), myQuantity, str(visibility), item, "sell")
+            wfm.updateListing(myOrderID, int(postPrice), myQuantity, visibility, item, "sell")
             return
-        
+
         else:
             updateDBPrice(item, int(myPlatPrice))
-            updateListing(myOrderID, str(int(postPrice)), myQuantity, str(visibility), item, "sell")
+            wfm.updateListing(myOrderID, int(postPrice), myQuantity, visibility, item, "sell")
             logging.debug(f"Your current (possibly hidden) posting on this item for {myPlatPrice} plat is a good one. Recommend to make visible.")
             return
     else:
-        response = postOrder(itemID, orderType, int(postPrice), str(myQuantity), str(True), modRank, item)
+        response = wfm.postOrder(itemID, orderType, int(postPrice), myQuantity, True, modRank, item)
         updateDBPrice(item, int(postPrice))
         logging.debug(f"AUTOMATICALLY POSTED VISIBLE {orderType.upper()} ORDER FOR {postPrice}")
         return
 
-# def calculate_potential_profit(row):
-#     item_url_name = row["item"]["url_name"]
-#     item = buySellOverlap.loc[item_url_name]
-#     return row["platinum"] - overlap_platinum
 
-
-r = postOrder("56783f24cbfa8f0432dd89a2", "buy", 1, 1, str(False), None, "lex_prime_set")
-if r.status_code == 401:
+# Vérification du token sans rien poster (l'ancien code postait un vrai ordre d'achat !)
+authOk, ingameName = wfm.checkAuth()
+if not authOk:
     config.setConfigStatus("runningLiveScraper", False)
-    raise Exception(f"Invalid JWT Token")
+    raise Exception("Invalid JWT Token (GET /v2/me refuse le token — régénère-le avec getWFMtoken.py)")
+if wfm.isDryRun():
+    logging.info("=== MODE DRY-RUN ACTIF : aucune écriture réelle sur warframe.market ===")
+    customLogger.writeTo("orderTracker.log", "MODE DRY-RUN ACTIF")
+
+SLUG_TO_ID = wfm.getSlugToId()
 
 settings = readSettings()
 deleteAllOrders(settings)
@@ -468,9 +455,9 @@ try:
         buySellOverlap = getBuySellOverlap(settings)
         interestingItems = list(buySellOverlap.index)
 
-        
 
-        currentOrders = getOrders()
+
+        currentOrders = wfm.getOrders()
 
         myBuyOrdersDF = pd.DataFrame.from_dict(currentOrders["buy_orders"])
         if myBuyOrdersDF.shape[0] != 0:
@@ -482,7 +469,7 @@ try:
         mySellOrdersDF = pd.DataFrame.from_dict(currentOrders["sell_orders"])
         if mySellOrdersDF.shape[0] != 0:
             mySellOrdersDF["url_name"] = mySellOrdersDF.apply(lambda row : row["item"]["url_name"], axis=1)
-        
+
         interestingItems += settings["whitelistedItems"]
         interestingItems += inventoryNames
 
@@ -490,13 +477,12 @@ try:
         interestingItems = list(set(interestingItems))
 
         items = currentOrders["sell_orders"] + currentOrders["buy_orders"]
-        item_info = []
         for item in items:
             url_name = item["item"]["url_name"]
             if not ignoreItems(url_name, settings):
                 if url_name not in interestingItems:
-                    deleteOrder(item["id"])
-        
+                    wfm.deleteOrder(item["id"])
+
         logging.debug("Interesting Items:\n" + ", ".join(interestingItems).replace("_", " ").title())
         customLogger.writeTo("orderTracker.log", f"Interesting Items (Post-Whitelist):{' '.join(interestingItems)}")
 
@@ -504,13 +490,12 @@ try:
             settings = readSettings()
             if not config.getConfigStatus("runningLiveScraper"):
                 break
-            
+
             con = sqlite3.connect('inventory.db')
 
             inventory = pd.read_sql_query("SELECT * FROM inventory", con)
             con.close()
             inventory = inventory[inventory.get("number") > 0]
-            #t = time.time()
 
             liveOrderDF = getFilteredDF(item)
             if liveOrderDF.empty:
@@ -518,23 +503,19 @@ try:
                 continue
 
             if item not in list(buySellOverlap.index):
-                r = warframeApi.get(f"https://api.warframe.market/v1/items/{item}")
-                customLogger.writeTo("wfmAPICalls.log", f"GET:https://api.warframe.market/v1/items/{item}\tResponse:{r.status_code}")
-                if r.status_code != 200:
+                itemID = SLUG_TO_ID.get(item)
+                if itemID is None:
+                    logging.debug(f"Unknown item {item}, skipping.")
                     continue
-
-                itemID = r.json()["payload"]["item"]['id']
-                try:
-                    modRank = r.json()["payload"]["item"]["items_in_set"][0]['mod_max_rank']
-                except KeyError:
-                    modRank = None
+                details = wfm.getItemDetails(item)
+                modRank = details.get("maxRank") if details else None
                 compareLiveOrdersWhenSelling(item, liveOrderDF, None, currentOrders, itemID, modRank, settings)
 
                 continue
 
             itemStats = buySellOverlap.loc[item]
             logging.debug(item.replace("_", " ").title() + f"(closedAvg: {round(itemStats['closedAvg'], 2)}):")
-            
+
             itemID = getItemId(item)
             modRank = getItemRank(buySellOverlap, item)
 
@@ -542,16 +523,10 @@ try:
             if isinstance(newBuyOrderDf, pd.DataFrame):
                 myBuyOrdersDF = newBuyOrderDf
             compareLiveOrdersWhenSelling(item, liveOrderDF, itemStats, currentOrders, itemID, modRank, settings)
-            
-            #compareLiveOrdersToData(item, liveOrderDF, "buy", itemStats, currentOrders, itemID, modRank, inventory)
-            #compareLiveOrdersToData(item, liveOrderDF, "sell", itemStats, currentOrders, itemID, modRank, inventory)
-            
-            #logging.debug(item)
-            #logging.debug(time.time() - t)
 
 except OSError as err:
     config.setConfigStatus("runningLiveScraper", False)
-    logging.debug("OS error:", err)
+    logging.debug(f"OS error: {err}")
 except Exception as err:
     config.setConfigStatus("runningLiveScraper", False)
     logging.debug(f"Unexpected {err=}, {type(err)=}")

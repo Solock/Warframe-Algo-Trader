@@ -1,34 +1,34 @@
+"""
+Récupère un token warframe.market et l'enregistre dans config.json.
+
+Usage : python getWFMtoken.py
+L'email et le mot de passe sont saisis localement (mot de passe masqué),
+envoyés uniquement à api.warframe.market, jamais stockés.
+"""
+import getpass
 import json
-import requests
-import config
+import os
 
-WFM_API = "https://api.warframe.market/v1"
+from AccessingWFMarket import login
 
-def login(
-    user_email: str, user_password: str, platform: str = "pc", language: str = "en"
-):
-    """
-    Used for logging into warframe.market via the API.
-    Returns (User_Name, JWT_Token) on success,
-    or returns (None, None) if unsuccessful.
-    """
-    headers = {
-        "Content-Type": "application/json; utf-8",
-        "Accept": "application/json",
-        "Authorization": "JWT",
-        "platform": platform,
-        "language": language,
-    }
-    content = {"email": user_email, "password": user_password, "auth_type": "header"}
-    response = requests.post(f"{WFM_API}/auth/signin", data=json.dumps(content), headers=headers)
-    if response.status_code != 200:
-        return None, None
-    return (response.json()["payload"]["user"]["ingame_name"], response.headers["Authorization"])
+if __name__ == "__main__":
+    email = input("Email warframe.market : ").strip()
+    password = getpass.getpass("Mot de passe (saisie masquée) : ")
+    platform = input("Plateforme [pc] : ").strip().lower() or "pc"
 
-# UNCOMMENT LINE BELOW IF YOU'RE ON PC:
-# MAKE SURE TO FILL IN <YOUR_INFO> BLANKS WITH YOUR INFO
-# print(login("<YOUR_WF.M_EMAIL>", "<YOUR_WF.M_PASSWORD>"))
-#
-# IF YOU'RE ON A NON-PC PLATFORM UNCOMMENT THIS LINE BELOW AND REPLACE THE <YOUR_PLATFORM> WITH WHATEVER PLATFORM YOU'RE ON
-# "pc" for pc, "ps4" for ps4, "xbox" for xbox, "switch" for switch
-# print(login("<YOUR_WF.M_EMAIL>", "<YOUR_WF.M_PASSWORD>", "<YOUR_PLATFORM>"))
+    ingameName, token = login(email, password, platform)
+    if token is None:
+        raise SystemExit("Échec du login — vérifie email/mot de passe.")
+
+    if not os.path.exists("config.json"):
+        raise SystemExit("config.json introuvable — lance d'abord : python init.py")
+
+    with open("config.json") as f:
+        configData = json.load(f)
+    configData["wfm_jwt_token"] = token.split(" ")[-1]
+    configData["inGameName"] = ingameName
+    configData["platform"] = platform
+    with open("config.json", "w") as f:
+        f.write(json.dumps(configData, indent=4))
+
+    print(f"OK — connecté en tant que {ingameName}, token enregistré dans config.json")

@@ -6,6 +6,7 @@
         
     ],
     "strictWhitelist" : false,
+    "dryRun" : true,
     "priceShiftThreshold" : -1,
     "avgPriceCap" : 600,
     "maxTotalPlatCap": 100000,

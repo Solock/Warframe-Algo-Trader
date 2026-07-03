@@ -45,3 +45,7 @@ tradeLog.txt
 allItemData.csv
 # runtime logs (Claude session)
 *.log
+
+# python venv + backup csv
+.venv/
+allItemDataBackup.csv
